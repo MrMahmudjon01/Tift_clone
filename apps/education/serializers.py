@@ -1,11 +1,15 @@
 from rest_framework import serializers
-from apps.education.models import Faculty, Director, Direction
+
+from apps.education.models import Direction, Director, Faculty
 
 
 class FacultyListSerializer(serializers.ModelSerializer):
+    degree_display = serializers.CharField(source="get_degree_display", read_only=True)
+    directions_count = serializers.IntegerField(read_only=True)  # view annotate qiladi
+
     class Meta:
         model = Faculty
-        fields = ("id", "title", "degree")
+        fields = ("id", "title", "degree", "degree_display", "directions_count")
 
 
 class DirectorModelSerializer(serializers.ModelSerializer):
@@ -15,32 +19,20 @@ class DirectorModelSerializer(serializers.ModelSerializer):
 
 
 class DirectionModelSerializer(serializers.ModelSerializer):
-    language = serializers.SerializerMethodField()
-    education_type = serializers.SerializerMethodField()
+    # id ariza formasida yo'nalishni tanlash uchun kerak (avval yo'q edi)
+    language = serializers.CharField(source="get_language_display", read_only=True)
+    education_type = serializers.CharField(source="get_education_type_display", read_only=True)
 
     class Meta:
         model = Direction
-        fields = ("title", "language", "body", "education_type")
-
-    def get_language(self, obj):
-        return obj.get_language_display()
-
-    def get_education_type(self, obj):
-        return obj.get_education_type_display()
+        fields = ("id", "title", "language", "body", "education_type")
 
 
 class FacultyDetailSerializer(serializers.ModelSerializer):
     director = DirectorModelSerializer()
     directions = DirectionModelSerializer(many=True)
-    degree = serializers.SerializerMethodField()
-    yangi_field = serializers.SerializerMethodField()
+    degree = serializers.CharField(source="get_degree_display", read_only=True)
 
     class Meta:
         model = Faculty
-        fields = ("title", "body", "degree", "director", "directions", "yangi_field")
-
-    def get_degree(self, obj):
-        return obj.get_degree_display()
-
-    def get_yangi_field(self, obj):
-        return "Yangi field"
+        fields = ("id", "title", "body", "degree", "director", "directions")

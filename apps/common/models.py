@@ -32,3 +32,6 @@ class Social(models.Model):
     title=models.CharField(max_length=255)
     social=models.CharField(choices=SocialMediaChoices.choices, max_length=16)
     link=models.URLField()
+
+    def __str__(self):
+        return f"{self.get_social_display()}: {self.title}"

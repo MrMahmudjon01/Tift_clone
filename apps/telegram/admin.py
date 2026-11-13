@@ -5,7 +5,7 @@ from apps.telegram import models
 @admin.register(models.TelegramUser)
 class TelegramUserAdmin(admin.ModelAdmin):
     list_display = ("id", "telegram_id", "first_name", "last_name", "user")
-    search_fields = ("Telegram_id", "user_first_name")
+    search_fields = ("telegram_id", "first_name", "last_name", "user__username")
 
 
 

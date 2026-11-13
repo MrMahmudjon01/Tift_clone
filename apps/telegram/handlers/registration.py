@@ -1,218 +1,200 @@
+"""Telegram orqali qabul arizasini topshirish (ConversationHandler bosqichlari).
+
+Avvalgi versiyadagi xatolar: ariza oxirida bazaga saqlanmasdi; mavjud bo'lmagan
+holatlarga (states.END, states.PINFL, states.BIRTH_DATE) qaytilib bot yiqilardi;
+takroriy ariza tekshiruvi Telegram ID ni Django user ID bilan solishtirardi.
+"""
+import re
+from datetime import date, datetime
+
+from django.contrib.auth import get_user_model
+from django.db import transaction
+from telegram import ReplyKeyboardRemove
+from telegram.ext import ConversationHandler
 
 from apps.application.models import Application
-from apps.telegram.keyboards import replies
+from apps.common.models import District, Region
+from apps.education.models import Direction, Faculty
 from apps.telegram import states
-from telegram import ReplyKeyboardRemove
-import re
-from datetime import datetime
-from apps.education.models import Faculty, Direction
-from apps.common.models import Region, District
+from apps.telegram.keyboards import replies
+from apps.telegram.models import TelegramUser
+
+User = get_user_model()
+
+PASSPORT_RE = re.compile(r"^[A-Z]{2}\d{7}$")
+PINFL_RE = re.compile(r"^\d{14}$")
+GENDERS = {"Erkak": "male", "Ayol": "female"}
+
+
+def get_or_create_site_user(tg_user) -> User:
+    """Telegram foydalanuvchisiga bog'langan Django foydalanuvchisi (ariza egasi)."""
+    tg, _ = TelegramUser.objects.get_or_create(
+        telegram_id=tg_user.id,
+        defaults={"first_name": tg_user.first_name, "last_name": tg_user.last_name},
+    )
+    if tg.user_id is None:
+        user, created = User.objects.get_or_create(username=f"tg_{tg_user.id}")
+        if created:
+            user.set_unusable_password()  # saytga parol bilan kira olmaydi
+            user.save(update_fields=["password"])
+        tg.user = user
+        tg.save(update_fields=["user"])
+    return tg.user
+
+
+def _text(update):
+    return (update.message.text or "").strip() if update.message else ""
 
 
 def get_phone(update, context):
-    if update.message and update.message.contact:
-        contact_user_id = update.message.contact.user_id
-        user_id = update.message.from_user.id
-
-        if Application.objects.filter(user_id=user_id).exists():
-            update.message.reply_text(
-                "You have already submitted your application and cannot resubmit it.",
-                reply_markup=ReplyKeyboardRemove()
-            )
-            return states.END
-
-        if contact_user_id != user_id:
-            update.message.reply_text("This number does not belong to you!", reply_markup=replies.get_contact())
+    msg = update.message
+    if msg and msg.contact:
+        if Application.objects.filter(user=get_or_create_site_user(msg.from_user)).exists():
+            msg.reply_text("Siz allaqachon ariza topshirgansiz. Holatini saytdagi shaxsiy kabinetda "
+                           "yoki /status buyrug'i orqali ko'rishingiz mumkin.", reply_markup=ReplyKeyboardRemove())
+            return ConversationHandler.END
+        if msg.contact.user_id != msg.from_user.id:
+            msg.reply_text("Bu raqam sizga tegishli emas. Iltimos, tugma orqali o'z raqamingizni yuboring.",
+                           reply_markup=replies.get_contact())
             return states.PHONE
-
-        phone = update.message.contact.phone_number
-        context.user_data['phone'] = phone
-        update.message.reply_text("You are in the tight way, Send your full name ", reply_markup=ReplyKeyboardRemove())
+        context.user_data["phone"] = msg.contact.phone_number
+        msg.reply_text("Rahmat! Endi ism va familiyangizni yuboring (masalan: Ali Valiyev).",
+                       reply_markup=ReplyKeyboardRemove())
         return states.FULL_NAME
-    update.message.reply_text("Please send your phone number by button!", reply_markup=replies.get_contact())
+    msg.reply_text("Iltimos, telefon raqamingizni pastdagi tugma orqali yuboring.",
+                   reply_markup=replies.get_contact())
     return states.PHONE
 
 
 def get_full_name(update, context):
-    if update.message and update.message.text:
-        full_name = update.message.text
-        context.user_data['full_name'] = full_name
-        update.message.reply_text("Everything is ok, send your passport in AA1234567 format",
-                                  reply_markup=ReplyKeyboardRemove())
+    parts = _text(update).split()
+    if len(parts) >= 2 and all(len(p) <= 100 for p in parts):
+        context.user_data["first_name"] = parts[0]
+        context.user_data["last_name"] = " ".join(parts[1:])
+        update.message.reply_text("Pasport seriya va raqamini AA1234567 formatida yuboring.")
         return states.PASSPORT
-
-    update.message.reply_text("Please your name as text", reply_markup=ReplyKeyboardRemove())
+    update.message.reply_text("Ism va familiyangizni bitta xabarda yuboring (masalan: Ali Valiyev).")
     return states.FULL_NAME
 
 
 def get_passport(update, context):
-    if update.message and update.message.text:
-        if re.match("^[A-Z]{2}\d{7}$", update.message.text):
-            context.user_data['passport'] = update.message.text
-            update.message.reply_text("Correct, please send your pinfl")
-            return states.PINFIL
-
-    update.message.reply_text("Please send your passport in AA1234567 format",
-                              reply_markup=ReplyKeyboardRemove())
+    text = _text(update).upper().replace(" ", "")
+    if PASSPORT_RE.match(text):
+        if Application.objects.filter(passport=text).exists():
+            update.message.reply_text("Bu pasport bilan ariza allaqachon topshirilgan.")
+            return states.PASSPORT
+        context.user_data["passport"] = text
+        update.message.reply_text("To'g'ri. Endi JSHSHIR (PINFL, 14 ta raqam) ni yuboring.")
+        return states.PINFIL
+    update.message.reply_text("Pasportni AA1234567 formatida yuboring.")
     return states.PASSPORT
 
 
 def get_pinfil(update, context):
-    if update.message and update.message.text:
-        if re.match("^\d{14}$", update.message.text):
-            context.user_data['pinfl'] = update.message.text
-            update.message.reply_text("Correct, please send your gender", reply_markup=replies.get_gender())
-            return states.GENDER
-    update.message.reply_text("Please send your pinfl data in 14 digits",
-                              reply_markup=ReplyKeyboardRemove())
-    return states.PINFL
+    text = _text(update).replace(" ", "")
+    if PINFL_RE.match(text):
+        context.user_data["pinfl"] = text
+        update.message.reply_text("Jinsingizni tanlang.", reply_markup=replies.get_gender())
+        return states.GENDER
+    update.message.reply_text("JSHSHIR 14 ta raqamdan iborat bo'lishi kerak.")
+    return states.PINFIL
 
 
 def get_gender(update, context):
-    if update.message and update.message.text:
-        text = update.message.text
-        genders = {
-            "Erkak": "male",
-            "Ayol": "female",
-        }
-        if text in genders.keys():
-            context.user_data["gender"] = genders[text]
-            update.message.reply_text("Please send your birth date in (DD.MM.YYYY) format",
-                                      reply_markup=ReplyKeyboardRemove())
-            return states.BIRTH_DATA
-
-    update.message.reply_text("Please choose your gender through the buttons below",
-                              reply_markup=replies.get_gender())
+    text = _text(update)
+    if text in GENDERS:
+        context.user_data["gender"] = GENDERS[text]
+        update.message.reply_text("Tug'ilgan sanangizni KK.OO.YYYY formatida yuboring (masalan: 15.03.2006).",
+                                  reply_markup=ReplyKeyboardRemove())
+        return states.BIRTH_DATA
+    update.message.reply_text("Iltimos, pastdagi tugmalardan birini tanlang.", reply_markup=replies.get_gender())
     return states.GENDER
 
 
 def get_birth_date(update, context):
-    if update.message and update.message.text:
-        text = update.message.text
-        if re.match("^(0[1-9]|[12][0-9]|3[01])\.(0[1-9]|1[0-2])\.(199[5-9]|20[0-1][0-9]|202[0-4])$", text):
-            try:
-                birth_date = datetime.strptime(text, '%d.%m.%Y')
-                context.user_data['birth_date'] = birth_date
-                update.message.reply_text("Correct, please send your faculty",
-                                          reply_markup=replies.get_items(Faculty.objects.all(), "title"))
-
-                return states.FACULTY
-            except ValueError:
-                pass
-
-
-        update.message.reply_text("Please send your birth date in (DD.MM.YYYY) format", reply_markup=ReplyKeyboardRemove())
-        return states.BIRTH_DATE
+    try:
+        birth_date = datetime.strptime(_text(update), "%d.%m.%Y").date()
+    except ValueError:
+        birth_date = None
+    today = date.today()
+    if birth_date and date(1950, 1, 1) <= birth_date <= today.replace(year=today.year - 14):
+        context.user_data["birth_date"] = birth_date
+        update.message.reply_text("Fakultetni tanlang.",
+                                  reply_markup=replies.get_items(Faculty.objects.all(), "title"))
+        return states.FACULTY
+    update.message.reply_text("Sanani KK.OO.YYYY formatida yuboring (masalan: 15.03.2006).")
+    return states.BIRTH_DATA
 
 
 def get_faculty(update, context):
-    if update.message and update.message.text:
-        text = update.message.text
-        try:
-            faculty = Faculty.objects.get(title=text)
-            context.user_data['faculty'] = faculty.id
-            update.message.reply_text(
-                "Please choose your direction",
-                reply_markup=replies.get_items(faculty.directions.all(), "title")
-            )
-            return states.DIRECTION
-        except Faculty.DoesNotExist:
-            update.message.reply_text(
-                "The selected faculty does not exist. Please choose a valid faculty from the list.",
-                reply_markup=replies.get_items(Faculty.objects.all(), "title")
-            )
-            return states.FACULTY
-
-    update.message.reply_text(
-        "Please send your faculty by choosing from the list below.",
-        reply_markup=replies.get_items(Faculty.objects.all(), "title")
-    )
+    faculty = Faculty.objects.filter(title=_text(update)).first()
+    if faculty:
+        context.user_data["faculty"] = faculty.id
+        update.message.reply_text("Yo'nalishni tanlang.",
+                                  reply_markup=replies.get_items(faculty.directions.all(), "title"))
+        return states.DIRECTION
+    update.message.reply_text("Ro'yxatdagi fakultetlardan birini tanlang.",
+                              reply_markup=replies.get_items(Faculty.objects.all(), "title"))
     return states.FACULTY
 
 
 def get_direction(update, context):
-    if update.message and update.message.text:
-        text = update.message.text
-        faculty_id = context.user_data.get('faculty')
-
-        try:
-            faculty = Faculty.objects.get(id=faculty_id)
-            direction = faculty.directions.get(title=text)
-            context.user_data['directions'] = direction.id
-            update.message.reply_text(
-                "Please choose your region",
-                reply_markup=replies.get_items(Region.objects.all(), "title")
-            )
-            return states.REGION
-        except Faculty.DoesNotExist:
-            update.message.reply_text(
-                "The selected faculty does not exist. Please try again.",
-                reply_markup=replies.get_items(Faculty.objects.all(), "title")
-            )
-            return states.FACULTY
-        except Direction.DoesNotExist:
-            update.message.reply_text(
-                "The selected direction is not valid. Please choose a valid direction.",
-                reply_markup=replies.get_items(faculty.directions.all(), "title")
-            )
-            return states.DIRECTION
-
-    update.message.reply_text(
-        "Please choose your direction from the available options.",
-        reply_markup=replies.get_items(Faculty.objects.get(id=context.user_data['faculty']).direction.all(), "title")
-    )
+    faculty = Faculty.objects.filter(id=context.user_data.get("faculty")).first()
+    if not faculty:
+        update.message.reply_text("Fakultetni qaytadan tanlang.",
+                                  reply_markup=replies.get_items(Faculty.objects.all(), "title"))
+        return states.FACULTY
+    direction = faculty.directions.filter(title=_text(update)).first()
+    if direction:
+        context.user_data["direction"] = direction.id
+        update.message.reply_text("Viloyatni tanlang.", reply_markup=replies.get_items(Region.objects.all(), "title"))
+        return states.REGION
+    update.message.reply_text("Ro'yxatdagi yo'nalishlardan birini tanlang.",
+                              reply_markup=replies.get_items(faculty.directions.all(), "title"))
     return states.DIRECTION
 
 
 def get_region(update, context):
-    if update.message and update.message.text:
-        text = update.message.text
-        try:
-            region = Region.objects.get(title=text)
-            context.user_data['region'] = region.id
-
-            update.message.reply_text(
-                "Please select your district",
-                reply_markup=replies.get_items(region.districts.all(), "title")
-            )
-            return states.DISTRICT
-        except Region.DoesNotExist:
-            update.message.reply_text(
-                "The selected region does not exist. Please choose a valid region from the list.",
-                reply_markup=replies.get_items(Region.objects.all(), "title")
-            )
-            return states.REGION
-
-    update.message.reply_text(
-        "Please choose your region.",
-        reply_markup=replies.get_items(Region.objects.all(), "title")
-    )
+    region = Region.objects.filter(title=_text(update)).first()
+    if region:
+        context.user_data["region"] = region.id
+        update.message.reply_text("Tumanni tanlang.", reply_markup=replies.get_items(region.districts.all(), "title"))
+        return states.DISTRICT
+    update.message.reply_text("Ro'yxatdagi viloyatlardan birini tanlang.",
+                              reply_markup=replies.get_items(Region.objects.all(), "title"))
     return states.REGION
 
 
 def get_district(update, context):
-    if update.message and update.message.text:
-        text = update.message.text
-        try:
-            district = District.objects.get(title=text)
-            context.user_data['district'] = district.id
-            update.message.reply_text(
-                "Registration complete! Your information has been saved. \n\n"
-                "Hello TFIT.uz welcome to boti send your phone number to leave an application",
-                reply_markup=replies.get_contact()
-            )
-            return states.PHONE
-        except District.DoesNotExist:
-            region = Region.objects.get(id=context.user_data['region'])
-            update.message.reply_text(
-                "District not found. Please choose a valid district.",
-                reply_markup=replies.get_items(region.districts.all(), "title")
-            )
-            return states.DISTRICT
+    region = Region.objects.filter(id=context.user_data.get("region")).first()
+    district = region.districts.filter(title=_text(update)).first() if region else None
+    if not district:
+        update.message.reply_text("Ro'yxatdagi tumanlardan birini tanlang.",
+                                  reply_markup=replies.get_items(region.districts.all(), "title") if region else None)
+        return states.DISTRICT
 
-    region = Region.objects.get(id=context.user_data['region'])
+    data = context.user_data
+    if Application.objects.filter(passport=data.get("passport")).exists():
+        update.message.reply_text("Bu pasport bilan ariza allaqachon topshirilgan.", reply_markup=ReplyKeyboardRemove())
+        return ConversationHandler.END
+    try:
+        with transaction.atomic():
+            application = Application.objects.create(
+                user=get_or_create_site_user(update.message.from_user),
+                first_name=data["first_name"], last_name=data["last_name"],
+                passport=data["passport"], pinfl=data["pinfl"], gender=data["gender"],
+                birth_date=data["birth_date"], direction=Direction.objects.filter(id=data["direction"]).first(),
+                district=district,
+            )
+    except KeyError:
+        update.message.reply_text("Ma'lumotlar to'liq emas. /start bilan qaytadan boshlang.",
+                                  reply_markup=ReplyKeyboardRemove())
+        return ConversationHandler.END
+
+    context.user_data.clear()
     update.message.reply_text(
-        "Please choose your district.",
-        reply_markup=replies.get_items(region.districts.all(), "title")
+        f"✅ Arizangiz qabul qilindi! Ariza raqami: {application.pk}.\n"
+        "Holatini /status buyrug'i orqali kuzatishingiz mumkin.",
+        reply_markup=ReplyKeyboardRemove(),
     )
-    return states.DISTRICT
+    return ConversationHandler.END

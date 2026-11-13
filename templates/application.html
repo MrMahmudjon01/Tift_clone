@@ -1,12 +1,50 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="uz">
 <head>
-    <meta charset="UTF-8">
-    <title>Title</title>
+  <meta charset="UTF-8">
+  <title>Qabul to'g'risida bildirishnoma — {{ application.last_name }} {{ application.first_name }}</title>
+  <style>
+    @page { size: A4; margin: 2cm; }
+    body { font-family: "DejaVu Sans", Arial, sans-serif; font-size: 11pt; color: #1a1a1a; line-height: 1.5; }
+    header { border-bottom: 2px solid #1d4ed8; padding-bottom: 8px; margin-bottom: 24px; }
+    header h1 { font-size: 16pt; margin: 0; color: #1d4ed8; }
+    header p { margin: 2px 0 0; color: #555; font-size: 9pt; }
+    h2 { font-size: 13pt; text-align: center; margin: 24px 0 16px; text-transform: uppercase; }
+    table { width: 100%; border-collapse: collapse; margin: 16px 0; }
+    td { padding: 6px 8px; border: 1px solid #d4d4d8; vertical-align: top; }
+    td:first-child { width: 38%; background: #f4f4f5; font-weight: bold; }
+    .sign { margin-top: 48px; display: flex; justify-content: space-between; }
+    .muted { color: #666; font-size: 9pt; }
+  </style>
 </head>
 <body>
-    <h1>
-       {{application.first_name}} {{application.last_name}}
-    </h1>
+  <header>
+    <h1>TIFT Clone — Qabul komissiyasi</h1>
+    <p>Hujjat avtomatik yaratilgan · Ariza № {{ application.pk }}</p>
+  </header>
+
+  <h2>Qabul to'g'risida bildirishnoma</h2>
+
+  <p>Hurmatli <b>{{ application.last_name }} {{ application.first_name }}</b>, sizning arizangiz
+  qabul komissiyasi tomonidan ko'rib chiqildi va <b>{{ application.get_status_display|lower }}</b>.</p>
+
+  <table>
+    <tr><td>Familiya, ism</td><td>{{ application.last_name }} {{ application.first_name }}</td></tr>
+    <tr><td>Tug'ilgan sana</td><td>{{ application.birth_date|date:"d.m.Y" }}</td></tr>
+    <tr><td>Jinsi</td><td>{{ application.get_gender_display }}</td></tr>
+    <tr><td>Pasport</td><td>{{ application.passport }}</td></tr>
+    <tr><td>Fakultet</td><td>{{ application.direction.faculty.title|default:"—" }}</td></tr>
+    <tr><td>Yo'nalish</td><td>{{ application.direction.title|default:"—" }}
+      {% if application.direction %}<span class="muted">({{ application.direction.get_education_type_display }}, {{ application.direction.get_language_display }})</span>{% endif %}</td></tr>
+    <tr><td>Hudud</td><td>{{ application.district.region.title|default:"—" }}, {{ application.district.title|default:"—" }}</td></tr>
+    <tr><td>Ariza topshirilgan</td><td>{{ application.created|date:"d.m.Y H:i" }}</td></tr>
+  </table>
+
+  <p class="muted">Ushbu hujjat o'quv loyihasi (demo) doirasida yaratilgan va rasmiy kuchga ega emas.</p>
+
+  <div class="sign">
+    <div>Qabul komissiyasi kotibi: ____________________</div>
+    <div>Sana: {% now "d.m.Y" %}</div>
+  </div>
 </body>
 </html>

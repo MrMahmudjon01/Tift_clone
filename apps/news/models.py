@@ -9,17 +9,19 @@ class NewsContent(models.Model):
 
     is_published = models.BooleanField(default=False)  # Corrected field name
     publish_time = models.DateTimeField()
-    created_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
 
     def save(self, *args, **kwargs):
         if not self.pk:
-            counter=0
-            original_slug = slugify(self.title)
-            slug=original_slug
+            # slugify kirill/o'zbek harflarini tashlab yuborishi mumkin — bo'sh slug bo'lmasin
+            original_slug = slugify(self.title, allow_unicode=True) or "yangilik"
+            slug, counter = original_slug, 1
             while NewsContent.objects.filter(slug=slug).exists():
-                slug=original_slug
-                slug=f"{slug}-{counter}"
-                counter+=1
+                slug = f"{original_slug}-{counter}"
+                counter += 1
 
             self.slug=slug
         return super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.title

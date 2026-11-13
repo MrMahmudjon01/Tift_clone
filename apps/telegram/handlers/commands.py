@@ -1,23 +1,42 @@
-from apps.telegram.models import TelegramUser
-from apps.telegram.keyboards import replies
+from telegram.ext import ConversationHandler
+
+from apps.application.models import Application
 from apps.telegram import states
+from apps.telegram.handlers.registration import get_or_create_site_user
+from apps.telegram.keyboards import replies
+
 
 def start(update, context):
-    user=update.message.from_user
-    first_name=user.first_name
-    last_name = user.last_name
-    telegram_id = user.id
-
-    TelegramUser.objects.update_or_create(
-        telegram_id=telegram_id,
-        defaults={
-            "last_name":last_name,
-            "first_name":first_name
-        }
-
+    get_or_create_site_user(update.message.from_user)
+    context.user_data.clear()
+    update.message.reply_text(
+        "Assalomu alaykum! TIFT Clone qabul botiga xush kelibsiz.\n"
+        "Ariza topshirish uchun telefon raqamingizni yuboring.",
+        reply_markup=replies.get_contact(),
     )
-    message="Assalomu aleykum, TIFT.uz botiga xush kelibsiz iltimos telefon raqamingizni yuboring."
-    update.message.reply_text(message, reply_markup=replies.get_contact())
     return states.PHONE
+
+
+def cancel(update, context):
+    context.user_data.clear()
+    update.message.reply_text("Bekor qilindi. Qaytadan boshlash uchun /start.")
+    return ConversationHandler.END
+
+
+def status(update, context):
+    user = get_or_create_site_user(update.message.from_user)
+    application = Application.objects.filter(user=user).select_related("direction").first()
+    if not application:
+        update.message.reply_text("Sizda hali ariza yo'q. Topshirish uchun /start.")
+        return
+    update.message.reply_text(
+        f"Ariza № {application.pk}\n"
+        f"Yo'nalish: {application.direction.title if application.direction else '—'}\n"
+        f"Holat: {application.get_status_display()}"
+    )
+
+
 def help(update, context):
-    update.message.reply_text("Yordam")
+    update.message.reply_text(
+        "/start — ariza topshirish\n/status — ariza holati\n/cancel — joriy jarayonni bekor qilish"
+    )
